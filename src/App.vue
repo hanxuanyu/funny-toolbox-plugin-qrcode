@@ -28,7 +28,6 @@ const previewAreaRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const existingQrInputRef = ref<HTMLInputElement | null>(null)
 const qrInstance = shallowRef<QRCodeStyling | null>(null)
-const floatingQrInstance = shallowRef<QRCodeStyling | null>(null)
 const isDownloading = ref(false)
 const activePreset = ref("自定义")
 const PREVIEW_SIZE = 300
@@ -50,6 +49,8 @@ const previewBoxStyle = computed(() => ({
 }))
 const isMobileViewport = computed(() => windowWidth.value < 1024)
 const shouldShowFloatingPreview = computed(() => isMobileViewport.value && !isPreviewInViewport.value)
+const floatingVisibilityReady = ref(false)
+const shouldRenderFloatingPreview = computed(() => floatingVisibilityReady.value && shouldShowFloatingPreview.value)
 
 const randomId = () => Math.random().toString(36).slice(2, 9)
 
@@ -206,11 +207,14 @@ const observePreviewVisibility = (el: HTMLElement | null) => {
   if (!el || typeof IntersectionObserver === "undefined") {
     previewVisibilityObserver = null
     isPreviewInViewport.value = true
+    floatingVisibilityReady.value = !!el || typeof IntersectionObserver === "undefined"
     return
   }
+  floatingVisibilityReady.value = false
   previewVisibilityObserver = new IntersectionObserver((entries) => {
     const entry = entries[0]
     isPreviewInViewport.value = !!entry?.isIntersecting
+    floatingVisibilityReady.value = true
   }, {
     threshold: 0.2,
     rootMargin: "-32px 0px -32px 0px",
@@ -722,11 +726,11 @@ const floatingPreviewViewportStyle = computed(() => ({
   width: `${floatingPreviewInnerSize.value}px`,
   height: `${floatingPreviewInnerSize.value}px`,
 }))
-
-const floatingPreviewCanvasStyle = {
-  width: "100%",
-  height: "100%",
-}
+const floatingPreviewScale = computed(() => {
+  if (!previewSize.value)
+    return 1
+  return Math.min(1, Number((floatingPreviewInnerSize.value / previewSize.value).toFixed(4)))
+})
 const floatingPreviewStyle = computed(() => ({
   width: `${floatingPreviewOuterWidth.value}px`,
   height: `${floatingPreviewOuterHeight.value}px`,
@@ -766,7 +770,7 @@ const stopFloatingDrag = () => {
 }
 
 const handleFloatingPointerDown = (event: PointerEvent) => {
-  if (!shouldShowFloatingPreview.value)
+  if (!shouldRenderFloatingPreview.value)
     return
   isDraggingFloatingPreview.value = true
   floatingDragOffset.x = event.clientX - floatingPosition.x
@@ -888,31 +892,71 @@ const buildQrOptions = (state: QrFormState, sizeOverride?: number): QRCodeOption
   },
 })
 
+const clonePreviewNode = (node: Element): HTMLElement | SVGElement | null => {
+  if (typeof document === "undefined")
+    return null
+  if (node instanceof HTMLCanvasElement) {
+    const clonedCanvas = document.createElement("canvas")
+    clonedCanvas.width = node.width
+    clonedCanvas.height = node.height
+    const ctx = clonedCanvas.getContext("2d")
+    if (ctx)
+      ctx.drawImage(node, 0, 0)
+    return clonedCanvas
+  }
+  if (node instanceof SVGElement)
+    return node.cloneNode(true) as SVGElement
+  if (node instanceof HTMLElement)
+    return node.cloneNode(true) as HTMLElement
+  return null
+}
+
+const applyFloatingStyles = (el: HTMLElement | SVGElement) => {
+  el.style.width = `${previewSize.value}px`
+  el.style.height = `${previewSize.value}px`
+  el.style.transformOrigin = "top left"
+  el.style.transform = `scale(${floatingPreviewScale.value})`
+  el.style.display = "block"
+}
+
 const syncFloatingPreviewContainer = () => {
-  if (!floatingPreviewRef.value || !floatingQrInstance.value)
+  if (!shouldRenderFloatingPreview.value)
     return
-  floatingPreviewRef.value.innerHTML = ""
-  floatingQrInstance.value.append(floatingPreviewRef.value)
+  const target = floatingPreviewRef.value
+  const sourceContainer = previewRef.value
+  if (!target || !sourceContainer)
+    return
+  const source = sourceContainer.firstElementChild
+  if (!source)
+    return
+  const clone = clonePreviewNode(source)
+  if (!clone)
+    return
+  applyFloatingStyles(clone)
+  target.innerHTML = ""
+  target.appendChild(clone)
+}
+
+const scheduleFloatingSync = async () => {
+  if (!shouldRenderFloatingPreview.value)
+    return
+  await nextTick()
+  syncFloatingPreviewContainer()
 }
 
 const handleDownload = async (extension: FileExtension) => {
-  if (!qrInstance.value)
-    return
   isDownloading.value = true
   try {
     const targetSize = resolvedDownloadSize.value
-    qrInstance.value.update({ width: targetSize, height: targetSize })
-    await qrInstance.value.download({
+    const exportQr = new QRCodeStyling(buildQrOptions(form, targetSize))
+    await exportQr.download({
       extension,
       name: `qr-${targetSize}-${extension}-${Date.now()}`,
     })
   }
   finally {
-    qrInstance.value.update({ width: previewSize.value, height: previewSize.value })
-    qrInstance.value.update(buildQrOptions(form))
-    if (floatingQrInstance.value)
-      floatingQrInstance.value.update(buildQrOptions(form, floatingPreviewInnerSize.value))
     isDownloading.value = false
+    scheduleFloatingSync()
   }
 }
 
@@ -922,18 +966,16 @@ onMounted(() => {
   qrInstance.value = new QRCodeStyling(buildQrOptions(form))
   if (previewRef.value)
     qrInstance.value.append(previewRef.value)
-  floatingQrInstance.value = new QRCodeStyling(buildQrOptions(form, floatingPreviewInnerSize.value))
+  scheduleFloatingSync()
 })
 
 watch(
   form,
   () => {
     const nextOptions = buildQrOptions(form)
-    const floatingOptions = buildQrOptions(form, floatingPreviewInnerSize.value)
     if (qrInstance.value)
       qrInstance.value.update(nextOptions)
-    if (floatingQrInstance.value)
-      floatingQrInstance.value.update(floatingOptions)
+    scheduleFloatingSync()
   },
   { deep: true },
 )
@@ -982,15 +1024,16 @@ watch(previewRef, (el) => {
   if (el && qrInstance.value) {
     el.innerHTML = ""
     qrInstance.value.append(el)
+    scheduleFloatingSync()
   }
 })
 
 watch(floatingPreviewRef, (el) => {
   if (el)
-    syncFloatingPreviewContainer()
+    scheduleFloatingSync()
 })
 
-watch(shouldShowFloatingPreview, async (visible) => {
+watch(shouldRenderFloatingPreview, async (visible) => {
   if (visible) {
     await nextTick()
     if (!floatingPositionInitialized) {
@@ -1008,14 +1051,12 @@ watch(shouldShowFloatingPreview, async (visible) => {
 })
 
 watch([floatingPreviewOuterWidth, floatingPreviewOuterHeight], () => {
-  if (shouldShowFloatingPreview.value)
+  if (shouldRenderFloatingPreview.value)
     clampFloatingPosition(floatingPosition.x, floatingPosition.y)
 })
 
-watch(floatingPreviewInnerSize, (size) => {
-  if (!floatingQrInstance.value)
-    return
-  floatingQrInstance.value.update(buildQrOptions(form, size))
+watch([floatingPreviewInnerSize, previewSize], () => {
+  scheduleFloatingSync()
 })
 
 const fileExtensions: FileExtension[] = ["png", "jpeg", "webp", "svg"]
@@ -1025,7 +1066,7 @@ const handleWindowResize = () => {
   windowWidth.value = window.innerWidth
   if (previewContainerRef.value)
     syncPreviewDimensions(previewContainerRef.value.clientWidth)
-  if (shouldShowFloatingPreview.value)
+  if (shouldRenderFloatingPreview.value)
     clampFloatingPosition(floatingPosition.x, floatingPosition.y)
 }
 
@@ -1596,7 +1637,7 @@ onBeforeUnmount(() => {
         leave-to-class="opacity-0 scale-95 translate-y-2"
       >
         <div
-          v-if="shouldShowFloatingPreview"
+          v-if="shouldRenderFloatingPreview"
           class="pointer-events-auto fixed z-50 rounded-2xl border border-border/60 bg-card/95 p-2.5 shadow-xl backdrop-blur"
           :style="floatingPreviewStyle"
           @pointerdown="handleFloatingPointerDown"
@@ -1618,7 +1659,6 @@ onBeforeUnmount(() => {
                 <div
                   ref="floatingPreviewRef"
                   class="h-full w-full"
-                  :style="floatingPreviewCanvasStyle"
                   aria-hidden="true"
                 />
               </div>
