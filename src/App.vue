@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, shallowRef, watch } from "vue"
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue"
 import QRCodeStyling, { type FileExtension, type Options as QRCodeOptions, type TypeNumber } from "qr-code-styling"
 import jsQR from "jsqr"
 import { Button } from "@/components/ui/button"
@@ -7,7 +7,6 @@ import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -21,18 +20,24 @@ import GradientControls from "@/components/GradientControls.vue"
 import type { GradientForm, QrFormState, QrPreset } from "@/types/qr"
 
 const previewRef = ref<HTMLElement | null>(null)
+const previewContainerRef = ref<HTMLElement | null>(null)
+const previewAreaRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const existingQrInputRef = ref<HTMLInputElement | null>(null)
 const qrInstance = shallowRef<QRCodeStyling | null>(null)
 const isDownloading = ref(false)
 const activePreset = ref("自定义")
 const PREVIEW_SIZE = 300
+const previewSize = ref(PREVIEW_SIZE)
+const windowHeight = ref(typeof window !== "undefined" ? window.innerHeight : 900)
 const downloadSizeChoice = ref("512")
 const downloadSizeOptions = ["256", "320", "384", "448", "512", "640", "800", "1024"]
-const resolvedDownloadSize = computed(() => Number(downloadSizeChoice.value) || PREVIEW_SIZE)
+const resolvedDownloadSize = computed(() => Number(downloadSizeChoice.value) || previewSize.value)
 const previewBoxStyle = computed(() => ({
-  width: `${PREVIEW_SIZE}px`,
-  height: `${PREVIEW_SIZE}px`,
+  width: `${previewSize.value}px`,
+  height: `${previewSize.value}px`,
+  maxWidth: "100%",
+  maxHeight: "100%",
 }))
 
 const randomId = () => Math.random().toString(36).slice(2, 9)
@@ -110,6 +115,78 @@ const existingQrMessage = reactive({
   type: "idle" as "idle" | "success" | "error",
   text: "",
 })
+
+let previewResizeObserver: ResizeObserver | null = null
+let previewAreaResizeObserver: ResizeObserver | null = null
+
+const getPreviewAreaHeight = () => {
+  if (!previewAreaRef.value)
+    return Infinity
+  if (typeof window === "undefined")
+    return previewAreaRef.value.clientHeight
+  const style = window.getComputedStyle(previewAreaRef.value)
+  const padding = parseFloat(style.paddingTop || "0") + parseFloat(style.paddingBottom || "0")
+  return Math.max(0, previewAreaRef.value.clientHeight - padding)
+}
+
+const clampPreviewSize = (width: number) => {
+  const widthBound = Math.min(480, Math.max(180, Math.round(width || PREVIEW_SIZE)))
+  const heightAllowance = (() => {
+    const areaHeight = getPreviewAreaHeight()
+    if (!Number.isFinite(areaHeight) || areaHeight <= 0)
+      return Math.max(180, Math.min(420, windowHeight.value - 220))
+    return Math.max(160, Math.min(420, areaHeight))
+  })()
+  return Math.max(160, Math.min(widthBound, heightAllowance))
+}
+
+const syncPreviewDimensions = (size: number) => {
+  const bounded = clampPreviewSize(size)
+  if (previewSize.value === bounded)
+    return
+  previewSize.value = bounded
+  form.width = bounded
+  form.height = bounded
+  if (qrInstance.value)
+    qrInstance.value.update({ width: bounded, height: bounded })
+}
+
+const observePreviewContainer = (el: HTMLElement | null) => {
+  previewResizeObserver?.disconnect()
+  if (!el) {
+    previewResizeObserver = null
+    return
+  }
+  syncPreviewDimensions(el.clientWidth)
+  if (typeof ResizeObserver === "undefined") {
+    previewResizeObserver = null
+    return
+  }
+  previewResizeObserver = new ResizeObserver((entries) => {
+    const entry = entries[0]
+    if (!entry)
+      return
+    syncPreviewDimensions(entry.contentRect.width)
+  })
+  previewResizeObserver.observe(el)
+}
+
+const observePreviewArea = (el: HTMLElement | null) => {
+  previewAreaResizeObserver?.disconnect()
+  if (!el || typeof ResizeObserver === "undefined") {
+    previewAreaResizeObserver = null
+    if (previewContainerRef.value)
+      syncPreviewDimensions(previewContainerRef.value.clientWidth)
+    return
+  }
+  previewAreaResizeObserver = new ResizeObserver(() => {
+    if (previewContainerRef.value)
+      syncPreviewDimensions(previewContainerRef.value.clientWidth)
+  })
+  previewAreaResizeObserver.observe(el)
+  if (previewContainerRef.value)
+    syncPreviewDimensions(previewContainerRef.value.clientWidth)
+}
 
 const ensureCircleRoundSize = () => {
   if (form.shape === "circle" && !form.dotsOptions.roundSize)
@@ -654,14 +731,16 @@ const isPlainObject = (value: unknown): value is Record<string, any> =>
 
 const applyPreset = (preset: QrPreset) => {
   applyPartial(form, preset.config() as Record<string, any>)
-  form.width = PREVIEW_SIZE
-  form.height = PREVIEW_SIZE
+  form.width = previewSize.value
+  form.height = previewSize.value
   ensureCircleRoundSize()
   activePreset.value = preset.name
 }
 
 const resetConfig = () => {
   Object.assign(form, createDefaultState())
+  form.width = previewSize.value
+  form.height = previewSize.value
   activePreset.value = "自定义"
 }
 
@@ -731,7 +810,7 @@ const handleDownload = async (extension: FileExtension) => {
     })
   }
   finally {
-    qrInstance.value.update({ width: PREVIEW_SIZE, height: PREVIEW_SIZE })
+    qrInstance.value.update({ width: previewSize.value, height: previewSize.value })
     qrInstance.value.update(buildQrOptions(form))
     isDownloading.value = false
   }
@@ -785,6 +864,14 @@ watch(
   },
 )
 
+watch(previewContainerRef, (el) => {
+  observePreviewContainer(el)
+})
+
+watch(previewAreaRef, (el) => {
+  observePreviewArea(el)
+})
+
 watch(previewRef, (el) => {
   if (el && qrInstance.value) {
     el.innerHTML = ""
@@ -793,11 +880,27 @@ watch(previewRef, (el) => {
 })
 
 const fileExtensions: FileExtension[] = ["png", "jpeg", "webp", "svg"]
+
+const handleWindowResize = () => {
+  windowHeight.value = window.innerHeight
+  if (previewContainerRef.value)
+    syncPreviewDimensions(previewContainerRef.value.clientWidth)
+}
+
+onMounted(() => {
+  window.addEventListener("resize", handleWindowResize)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", handleWindowResize)
+  previewResizeObserver?.disconnect()
+  previewAreaResizeObserver?.disconnect()
+})
 </script>
 
 <template>
   <div class="min-h-screen bg-gradient-to-b from-muted/40 via-background to-background">
-    <main class="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-10 lg:py-14">
+    <main class="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-4 lg:gap-6 lg:py-8">
       <header class="space-y-3 text-center lg:text-left">
         <div class="space-y-2">
           <h1 class="text-3xl font-semibold tracking-tight md:text-4xl">Funny-QRCode</h1>
@@ -805,14 +908,14 @@ const fileExtensions: FileExtension[] = ["png", "jpeg", "webp", "svg"]
       </header>
 
       <div class="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
-        <Card class="order-2 flex max-h-none flex-col overflow-hidden border-border/70 lg:order-1 lg:h-[calc(100vh-220px)]">
+          <Card class="order-2 flex max-h-none flex-col overflow-hidden border-border/70 lg:order-1 lg:h-[calc(100vh-160px)]">
           <CardHeader class="gap-2 pb-0">
             <CardTitle>参数配置</CardTitle>
             <CardDescription>所有参数与 qr-code-styling 官方一致，移动端也可轻松操作。</CardDescription>
           </CardHeader>
           <CardContent class="flex-1 overflow-hidden p-0">
             <div
-              class="h-full space-y-8 overflow-y-auto px-4 pb-12 pt-6 md:px-6 lg:pr-4"
+              class="h-full space-y-6 overflow-y-auto px-4 pb-6 pt-6 md:px-6 lg:pr-4"
             >
                 <section class="space-y-3">
                   <div class="flex flex-wrap items-center justify-between gap-3">
@@ -1278,25 +1381,17 @@ const fileExtensions: FileExtension[] = ["png", "jpeg", "webp", "svg"]
           </CardContent>
         </Card>
 
-        <div class="order-1 flex flex-col gap-6 lg:order-2 lg:sticky lg:top-10">
-          <Card class="flex flex-col overflow-hidden border-border/70 lg:h-[calc(100vh-220px)]">
-            <CardHeader class="gap-2 pb-2">
-              <CardTitle>实时预览</CardTitle>
-              <CardDescription>固定 {{ PREVIEW_SIZE }}px × {{ PREVIEW_SIZE }}px · {{ form.shape }}</CardDescription>
-            </CardHeader>
-            <CardContent class="flex flex-1 flex-col gap-5 pb-6">
-              <div class="rounded-2xl border bg-card/80 p-5">
-                <div class="flex items-center justify-center">
-                  <div ref="previewRef" class="rounded-xl" :style="previewBoxStyle" aria-live="polite" />
-                </div>
+        <div class="order-1 flex flex-col gap-4 lg:order-2 lg:sticky lg:top-4">
+          <Card class="flex flex-col border-border/70 lg:h-[calc(100vh-160px)] lg:overflow-hidden">
+            <CardHeader class="flex flex-wrap items-center justify-between gap-3 pb-1">
+              <div>
+                <CardTitle class="text-lg leading-tight">实时预览</CardTitle>
+                <p class="text-xs text-muted-foreground">画布依据容器宽度自适应</p>
               </div>
-              <div class="flex flex-wrap items-center gap-3">
-                <div class="space-y-1 text-xs text-muted-foreground">
-                  <p class="font-medium text-foreground">下载尺寸</p>
-                  <p>仅影响导出文件，预览保持 {{ PREVIEW_SIZE }}px</p>
-                </div>
+              <div class="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>导出尺寸</span>
                 <Select v-model="downloadSizeChoice">
-                  <SelectTrigger class="w-32">
+                  <SelectTrigger class="w-28 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1306,29 +1401,43 @@ const fileExtensions: FileExtension[] = ["png", "jpeg", "webp", "svg"]
                   </SelectContent>
                 </Select>
               </div>
-              <div class="flex flex-wrap items-center gap-3">
-                <p class="text-xs text-muted-foreground">导出格式</p>
-                <div class="flex flex-wrap gap-2">
-                  <Button
-                    v-for="ext in fileExtensions"
-                    :key="ext"
-                    size="sm"
-                    variant="outline"
-                    :disabled="isDownloading"
-                    type="button"
-                    @click="handleDownload(ext)"
-                  >{{ ext.toUpperCase() }}</Button>
+            </CardHeader>
+            <CardContent class="flex flex-1 min-h-0 flex-col gap-3 px-4 pb-3 pt-0">
+              <div
+                ref="previewAreaRef"
+                class="flex flex-1 min-h-0 items-center justify-center overflow-hidden rounded-2xl border bg-card/80 p-3"
+              >
+                <div ref="previewContainerRef" class="w-full max-w-[420px]">
+                  <div class="mx-auto" :style="previewBoxStyle">
+                    <div ref="previewRef" class="h-full w-full" aria-live="polite" />
+                  </div>
                 </div>
-                <span v-if="isDownloading" class="text-xs text-muted-foreground">准备中…</span>
+              </div>
+              <div class="shrink-0 space-y-2">
+                <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>数据 {{ dataLength }} B</span>
+                  <span>·</span>
+                  <span>容错 {{ form.qrOptions.errorCorrectionLevel }}</span>
+                  <span>·</span>
+                  <span>预览 {{ previewSize }} px</span>
+                  <span v-if="isDownloading">· 导出准备中…</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-xs text-muted-foreground">导出格式</span>
+                  <div class="flex flex-wrap gap-2">
+                    <Button
+                      v-for="ext in fileExtensions"
+                      :key="ext"
+                      size="sm"
+                      variant="outline"
+                      :disabled="isDownloading"
+                      type="button"
+                      @click="handleDownload(ext)"
+                    >{{ ext.toUpperCase() }}</Button>
+                  </div>
+                </div>
               </div>
             </CardContent>
-            <CardFooter class="flex flex-wrap gap-2 text-xs text-muted-foreground">
-              <span>数据长度：{{ dataLength }} bytes</span>
-              <span>·</span>
-              <span>错误级别：{{ form.qrOptions.errorCorrectionLevel }}</span>
-              <span>·</span>
-              <span>下载尺寸：{{ resolvedDownloadSize }} px</span>
-            </CardFooter>
           </Card>
         </div>
       </div>
