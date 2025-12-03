@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from "vue"
 import QRCodeStyling, { type FileExtension, type Options as QRCodeOptions, type TypeNumber } from "qr-code-styling"
 import jsQR from "jsqr"
 import { Button } from "@/components/ui/button"
@@ -19,17 +19,26 @@ import { Textarea } from "@/components/ui/textarea"
 import GradientControls from "@/components/GradientControls.vue"
 import type { GradientForm, QrFormState, QrPreset } from "@/types/qr"
 
+const defaultQrData = typeof window !== "undefined" ? window.location.href : "https://funny-toolbox.io/"
+
 const previewRef = ref<HTMLElement | null>(null)
+const floatingPreviewRef = ref<HTMLElement | null>(null)
 const previewContainerRef = ref<HTMLElement | null>(null)
 const previewAreaRef = ref<HTMLElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const existingQrInputRef = ref<HTMLInputElement | null>(null)
 const qrInstance = shallowRef<QRCodeStyling | null>(null)
+const floatingQrInstance = shallowRef<QRCodeStyling | null>(null)
 const isDownloading = ref(false)
 const activePreset = ref("自定义")
 const PREVIEW_SIZE = 300
 const previewSize = ref(PREVIEW_SIZE)
 const windowHeight = ref(typeof window !== "undefined" ? window.innerHeight : 900)
+const windowWidth = ref(typeof window !== "undefined" ? window.innerWidth : 1200)
+const isPreviewInViewport = ref(true)
+const floatingPosition = reactive({ x: 16, y: 16 })
+const floatingDragOffset = reactive({ x: 0, y: 0 })
+const isDraggingFloatingPreview = ref(false)
 const downloadSizeChoice = ref("512")
 const downloadSizeOptions = ["256", "320", "384", "448", "512", "640", "800", "1024"]
 const resolvedDownloadSize = computed(() => Number(downloadSizeChoice.value) || previewSize.value)
@@ -39,6 +48,8 @@ const previewBoxStyle = computed(() => ({
   maxWidth: "100%",
   maxHeight: "100%",
 }))
+const isMobileViewport = computed(() => windowWidth.value < 1024)
+const shouldShowFloatingPreview = computed(() => isMobileViewport.value && !isPreviewInViewport.value)
 
 const randomId = () => Math.random().toString(36).slice(2, 9)
 
@@ -65,7 +76,7 @@ const createDefaultState = (): QrFormState => ({
   type: "svg",
   shape: "square",
   margin: 12,
-  data: "https://funny-toolbox.io/",
+  data: defaultQrData,
   image: "",
   qrOptions: {
     typeNumber: 0,
@@ -118,6 +129,8 @@ const existingQrMessage = reactive({
 
 let previewResizeObserver: ResizeObserver | null = null
 let previewAreaResizeObserver: ResizeObserver | null = null
+let previewVisibilityObserver: IntersectionObserver | null = null
+let floatingPositionInitialized = false
 
 const getPreviewAreaHeight = () => {
   if (!previewAreaRef.value)
@@ -186,6 +199,23 @@ const observePreviewArea = (el: HTMLElement | null) => {
   previewAreaResizeObserver.observe(el)
   if (previewContainerRef.value)
     syncPreviewDimensions(previewContainerRef.value.clientWidth)
+}
+
+const observePreviewVisibility = (el: HTMLElement | null) => {
+  previewVisibilityObserver?.disconnect()
+  if (!el || typeof IntersectionObserver === "undefined") {
+    previewVisibilityObserver = null
+    isPreviewInViewport.value = true
+    return
+  }
+  previewVisibilityObserver = new IntersectionObserver((entries) => {
+    const entry = entries[0]
+    isPreviewInViewport.value = !!entry?.isIntersecting
+  }, {
+    threshold: 0.2,
+    rootMargin: "-32px 0px -32px 0px",
+  })
+  previewVisibilityObserver.observe(el)
 }
 
 const ensureCircleRoundSize = () => {
@@ -685,6 +715,67 @@ const clampNumber = (value: number, min: number, max: number) => {
   return Math.min(max, Math.max(min, safe))
 }
 
+const floatingPreviewInnerSize = computed(() => clampNumber(Math.round(previewSize.value * 0.45), 120, 180))
+const floatingPreviewOuterWidth = computed(() => floatingPreviewInnerSize.value + 28)
+const floatingPreviewOuterHeight = computed(() => floatingPreviewInnerSize.value + 60)
+const floatingPreviewViewportStyle = computed(() => ({
+  width: `${floatingPreviewInnerSize.value}px`,
+  height: `${floatingPreviewInnerSize.value}px`,
+}))
+
+const floatingPreviewCanvasStyle = {
+  width: "100%",
+  height: "100%",
+}
+const floatingPreviewStyle = computed(() => ({
+  width: `${floatingPreviewOuterWidth.value}px`,
+  height: `${floatingPreviewOuterHeight.value}px`,
+  left: `${floatingPosition.x}px`,
+  top: `${floatingPosition.y}px`,
+  touchAction: "none",
+}))
+
+const clampFloatingPosition = (x: number, y: number) => {
+  const padding = 12
+  const maxX = Math.max(padding, windowWidth.value - floatingPreviewOuterWidth.value - padding)
+  const maxY = Math.max(padding, windowHeight.value - floatingPreviewOuterHeight.value - padding)
+  floatingPosition.x = clampNumber(x, padding, maxX)
+  floatingPosition.y = clampNumber(y, padding, maxY)
+}
+
+const resetFloatingPreviewPosition = () => {
+  clampFloatingPosition(
+    windowWidth.value - floatingPreviewOuterWidth.value - 16,
+    windowHeight.value - floatingPreviewOuterHeight.value - 24,
+  )
+  floatingPositionInitialized = true
+}
+
+const handleFloatingPointerMove = (event: PointerEvent) => {
+  if (!isDraggingFloatingPreview.value)
+    return
+  clampFloatingPosition(event.clientX - floatingDragOffset.x, event.clientY - floatingDragOffset.y)
+}
+
+const stopFloatingDrag = () => {
+  if (!isDraggingFloatingPreview.value)
+    return
+  isDraggingFloatingPreview.value = false
+  window.removeEventListener("pointermove", handleFloatingPointerMove)
+  window.removeEventListener("pointerup", stopFloatingDrag)
+}
+
+const handleFloatingPointerDown = (event: PointerEvent) => {
+  if (!shouldShowFloatingPreview.value)
+    return
+  isDraggingFloatingPreview.value = true
+  floatingDragOffset.x = event.clientX - floatingPosition.x
+  floatingDragOffset.y = event.clientY - floatingPosition.y
+  window.addEventListener("pointermove", handleFloatingPointerMove)
+  window.addEventListener("pointerup", stopFloatingDrag)
+  event.preventDefault()
+}
+
 const openFilePicker = () => fileInputRef.value?.click()
 
 const handleImageUpload = (event: Event) => {
@@ -759,9 +850,9 @@ const gradientToOptions = (gradient: GradientForm) => {
   }
 }
 
-const buildQrOptions = (state: QrFormState): QRCodeOptions => ({
-  width: state.width,
-  height: state.height,
+const buildQrOptions = (state: QrFormState, sizeOverride?: number): QRCodeOptions => ({
+  width: sizeOverride ?? state.width,
+  height: sizeOverride ?? state.height,
   type: state.type,
   shape: state.shape,
   margin: state.margin,
@@ -797,6 +888,13 @@ const buildQrOptions = (state: QrFormState): QRCodeOptions => ({
   },
 })
 
+const syncFloatingPreviewContainer = () => {
+  if (!floatingPreviewRef.value || !floatingQrInstance.value)
+    return
+  floatingPreviewRef.value.innerHTML = ""
+  floatingQrInstance.value.append(floatingPreviewRef.value)
+}
+
 const handleDownload = async (extension: FileExtension) => {
   if (!qrInstance.value)
     return
@@ -812,6 +910,8 @@ const handleDownload = async (extension: FileExtension) => {
   finally {
     qrInstance.value.update({ width: previewSize.value, height: previewSize.value })
     qrInstance.value.update(buildQrOptions(form))
+    if (floatingQrInstance.value)
+      floatingQrInstance.value.update(buildQrOptions(form, floatingPreviewInnerSize.value))
     isDownloading.value = false
   }
 }
@@ -822,13 +922,18 @@ onMounted(() => {
   qrInstance.value = new QRCodeStyling(buildQrOptions(form))
   if (previewRef.value)
     qrInstance.value.append(previewRef.value)
+  floatingQrInstance.value = new QRCodeStyling(buildQrOptions(form, floatingPreviewInnerSize.value))
 })
 
 watch(
   form,
   () => {
+    const nextOptions = buildQrOptions(form)
+    const floatingOptions = buildQrOptions(form, floatingPreviewInnerSize.value)
     if (qrInstance.value)
-      qrInstance.value.update(buildQrOptions(form))
+      qrInstance.value.update(nextOptions)
+    if (floatingQrInstance.value)
+      floatingQrInstance.value.update(floatingOptions)
   },
   { deep: true },
 )
@@ -870,6 +975,7 @@ watch(previewContainerRef, (el) => {
 
 watch(previewAreaRef, (el) => {
   observePreviewArea(el)
+  observePreviewVisibility(el)
 })
 
 watch(previewRef, (el) => {
@@ -879,12 +985,48 @@ watch(previewRef, (el) => {
   }
 })
 
+watch(floatingPreviewRef, (el) => {
+  if (el)
+    syncFloatingPreviewContainer()
+})
+
+watch(shouldShowFloatingPreview, async (visible) => {
+  if (visible) {
+    await nextTick()
+    if (!floatingPositionInitialized) {
+      resetFloatingPreviewPosition()
+      floatingPositionInitialized = true
+    }
+    else {
+      clampFloatingPosition(floatingPosition.x, floatingPosition.y)
+    }
+    syncFloatingPreviewContainer()
+  }
+  else {
+    stopFloatingDrag()
+  }
+})
+
+watch([floatingPreviewOuterWidth, floatingPreviewOuterHeight], () => {
+  if (shouldShowFloatingPreview.value)
+    clampFloatingPosition(floatingPosition.x, floatingPosition.y)
+})
+
+watch(floatingPreviewInnerSize, (size) => {
+  if (!floatingQrInstance.value)
+    return
+  floatingQrInstance.value.update(buildQrOptions(form, size))
+})
+
 const fileExtensions: FileExtension[] = ["png", "jpeg", "webp", "svg"]
 
 const handleWindowResize = () => {
   windowHeight.value = window.innerHeight
+  windowWidth.value = window.innerWidth
   if (previewContainerRef.value)
     syncPreviewDimensions(previewContainerRef.value.clientWidth)
+  if (shouldShowFloatingPreview.value)
+    clampFloatingPosition(floatingPosition.x, floatingPosition.y)
 }
 
 onMounted(() => {
@@ -895,6 +1037,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", handleWindowResize)
   previewResizeObserver?.disconnect()
   previewAreaResizeObserver?.disconnect()
+  previewVisibilityObserver?.disconnect()
+  stopFloatingDrag()
 })
 </script>
 
@@ -1442,5 +1586,46 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </main>
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-200 ease-out"
+        enter-from-class="opacity-0 scale-95 translate-y-2"
+        enter-to-class="opacity-100 scale-100 translate-y-0"
+        leave-active-class="transition duration-150 ease-in"
+        leave-from-class="opacity-100 scale-100 translate-y-0"
+        leave-to-class="opacity-0 scale-95 translate-y-2"
+      >
+        <div
+          v-if="shouldShowFloatingPreview"
+          class="pointer-events-auto fixed z-50 rounded-2xl border border-border/60 bg-card/95 p-2.5 shadow-xl backdrop-blur"
+          :style="floatingPreviewStyle"
+          @pointerdown="handleFloatingPointerDown"
+        >
+          <div class="flex items-center justify-between pb-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground/80">
+            <span>实时预览</span>
+            <button
+              type="button"
+              class="font-semibold text-primary/90 hover:text-primary"
+              @click.stop.prevent="resetFloatingPreviewPosition"
+              @pointerdown.stop
+            >
+              复位
+            </button>
+          </div>
+          <div class="rounded-xl border border-border/70 bg-background/90 p-1.5 shadow-sm">
+            <div class="flex items-center justify-center">
+              <div class="overflow-hidden rounded-lg" :style="floatingPreviewViewportStyle">
+                <div
+                  ref="floatingPreviewRef"
+                  class="h-full w-full"
+                  :style="floatingPreviewCanvasStyle"
+                  aria-hidden="true"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
