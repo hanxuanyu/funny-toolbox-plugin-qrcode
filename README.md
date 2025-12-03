@@ -1,5 +1,64 @@
-# Vue 3 + TypeScript + Vite
+# 趣味二维码工坊（Funny Toolbox – QR Generator）
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+## 🇨🇳 项目简介
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+Funny Toolbox – QR Generator 是一个基于 Vue 3 + TypeScript 构建的全功能二维码设计工作台。它集成了 `qr-code-styling` 绘制内核和 shadcn-vue 组件体系，支持：
+
+- 粘贴或手动输入任意文本/链接，实时预览 300×300 px 的二维码。
+- 上传已有二维码图片并通过 `jsqr` 自动解析内容，实现 “旧码美化”。
+- 自定义 dots / 角标 / 背景渐变、圆角、预设主题、徽标大小与边距等参数。
+- 导出 PNG/JPEG/WEBP/SVG 多种格式，并控制下载尺寸（256～1024 px）。
+- 左侧配置面板支持滚动，右侧预览固定高度，保证大屏场景下一屏展示。
+
+## ✨ 功能特性
+
+- **实时预览**：固定 300×300 px，下载尺寸可独立调整。
+- **快速预设**：徽章式主题选择器，可一键切换多种配色风格。
+- **渐变编辑器**：支持圆/线性渐变、旋转角度、节点偏移的滑杆 + 数字输入组合。
+- **徽标管理**：图像系数按 0.1 步进（0.1～0.6），边距 0～17 px，始终在安全区内。
+- **旧码美化**：选择已有二维码图片后自动识别内容并填入文本区域。
+- **响应式布局**：大屏保持单屏显示，小屏依然可滚动使用。
+
+## 🧱 技术栈与开源声明
+
+| 组件/库 | 用途 |
+| --- | --- |
+| [Vue 3](https://vuejs.org/) + [TypeScript](https://www.typescriptlang.org/) | 应用框架与静态类型支持 |
+| [Vite](https://vitejs.dev/) | 本地调试、打包工具 |
+| [qr-code-styling](https://github.com/kozakdenys/qr-code-styling) | 二维码绘制、渐变、导出实现 |
+| [shadcn-vue](https://www.shadcn-vue.com/) + [reka-ui](https://reka-ui.netlify.app/) | UI primitives（Button、Card、Switch、Select 等）|
+| [jsqr](https://github.com/cozmo/jsQR) | 解析上传的二维码图片 |
+| [Tailwind CSS](https://tailwindcss.com/)（通过 `@tailwindcss/vite`） | 工具类样式 |
+| [@vueuse/core](https://vueuse.org/)、`clsx`、`class-variance-authority`、`tailwind-merge`、`tw-animate-css` | 组合式工具与样式辅助 |
+
+以上依赖均遵循各自的开源协议（当前均与 MIT 兼容），使用前请自行查阅许可证。
+
+## 🚀 快速开始
+
+```bash
+npm install       # 安装依赖
+npm run dev       # 启动开发服务器
+npm run build     # Type-check + 生产打包
+npm run preview   # 预览生产构建
+```
+
+默认开发地址为 `http://localhost:5173`。
+
+## 📁 目录亮点
+
+- `src/App.vue`：主界面逻辑，包含状态管理、预设、旧码解析、下载流程与布局。
+- `src/components/GradientControls.vue`：渐变控制组件，包含节点管理与自适应滑动条。
+- `src/components/ui/*`：通过 shadcn-vue 生成的通用 UI 组件。
+
+## 📝 额外说明
+
+- Circle 形状时自动强制 `roundSize = true`，确保 qr-code-styling 不报错。
+- 徽标尺寸强制 0.1～0.6，边距 0～17 px，避免遮挡识读区域。
+- 旧码解析完全在浏览器本地完成，不会上传到第三方服务器。
+- 新增预设时请确保渐变至少包含两个节点，并保持宽高与 `PREVIEW_SIZE` 一致。
+
+## 📄 许可信息
+
+本仓库遵循 `package.json` 中声明的 License；所有第三方依赖保持原始许可证不变。
+
+> Looking for English docs? See [`README.en.md`](./README.en.md).
