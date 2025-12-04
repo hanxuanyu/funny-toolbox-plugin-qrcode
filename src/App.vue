@@ -54,6 +54,26 @@ const shouldRenderFloatingPreview = computed(() => floatingVisibilityReady.value
 
 const randomId = () => Math.random().toString(36).slice(2, 9)
 
+const encodeUtf8Binary = (text: string) => {
+  if (!text)
+    return ""
+  if (typeof TextEncoder !== "undefined") {
+    const encoder = new TextEncoder()
+    const bytes = encoder.encode(text)
+    let binary = ""
+    bytes.forEach((byte) => {
+      binary += String.fromCharCode(byte)
+    })
+    return binary
+  }
+  try {
+    return unescape(encodeURIComponent(text))
+  }
+  catch {
+    return text
+  }
+}
+
 const createGradient = (
   options?: Partial<Omit<GradientForm, "colorStops">> & { colorStops?: Array<{ offset: number; color: string }> },
 ): GradientForm => ({
@@ -860,7 +880,7 @@ const buildQrOptions = (state: QrFormState, sizeOverride?: number): QRCodeOption
   type: state.type,
   shape: state.shape,
   margin: state.margin,
-  data: state.data || "https://example.com",
+  data: encodeUtf8Binary(state.data || "https://example.com"),
   image: state.image || undefined,
   qrOptions: {
     ...state.qrOptions,
