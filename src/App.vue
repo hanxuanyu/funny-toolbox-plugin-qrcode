@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
-  CardDescription,
+    // CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -1096,7 +1096,7 @@ onBeforeUnmount(() => {
           <Card class="order-2 flex max-h-none flex-col overflow-hidden border-border/70 lg:order-1 lg:h-[calc(100vh-160px)]">
           <CardHeader class="gap-2 pb-0">
             <CardTitle>参数配置</CardTitle>
-            <CardDescription>所有参数与 qr-code-styling 官方一致，移动端也可轻松操作。</CardDescription>
+            <!--<CardDescription>所有参数与 qr-code-styling 官方一致，移动端也可轻松操作。</CardDescription>-->
           </CardHeader>
           <CardContent class="flex-1 overflow-hidden p-0">
             <div
@@ -1106,7 +1106,7 @@ onBeforeUnmount(() => {
                   <div class="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p class="text-sm font-semibold">快速预设</p>
-                      <p class="text-xs text-muted-foreground">常用风格一键加载，稍后再微调细节</p>
+                    <!--<p class="text-xs text-muted-foreground">常用风格一键加载，稍后再微调细节</p>-->
                     </div>
                     <span class="text-xs text-muted-foreground">当前：{{ activePreset }}</span>
                   </div>
@@ -1429,7 +1429,7 @@ onBeforeUnmount(() => {
                 <section class="space-y-6">
                   <div>
                     <p class="text-sm font-semibold">点阵样式</p>
-                    <p class="text-xs text-muted-foreground">Dots、定位角等细节一次调齐</p>
+                    <p class="text-xs text-muted-foreground">Dots、定位角等细节调整</p>
                   </div>
                   <div class="grid gap-4 md:grid-cols-2">
                     <div class="space-y-2">
@@ -1571,7 +1571,6 @@ onBeforeUnmount(() => {
             <CardHeader class="flex flex-wrap items-center justify-between gap-3 pb-1">
               <div>
                 <CardTitle class="text-lg leading-tight">实时预览</CardTitle>
-                <p class="text-xs text-muted-foreground">画布依据容器宽度自适应</p>
               </div>
               <div class="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>导出尺寸</span>
